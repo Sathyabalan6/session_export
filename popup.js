@@ -1,5 +1,5 @@
 // popup.js
-
+// CRITICAL_COOKIES is defined once here for UI highlighting only
 const CRITICAL_COOKIES = [
   "auth_token", "ct0", "twid", "kdt", "lang",
   "guest_id", "guest_id_ads", "guest_id_marketing",
@@ -117,72 +117,120 @@ function handleExportClick() {
     });
   });
 }
-// Session Management Functions
+// Export for Cookie-Editor button handler
+function handleCookieEditorExportClick() {
+  showToast("Preparing Cookie-Editor export...", "info");
+  chrome.runtime.sendMessage({ action: "exportForCookieEditor" }, (resp) => {
+    if (chrome.runtime.lastError) {
+      showToast("Error: " + chrome.runtime.lastError.message, "error");
+      return;
+    }
+    if (resp?.success) {
+      showToast(`✓ ${resp.message}`, "success", 5000);
+    } else {
+      showToast("❌ " + (resp?.message || "Export failed"), "error");
+    }
+  });
+}
+
 
 async function loadSavedSessions() {
   const sessionList = $("sessionList");
   if (!sessionList) return;
-  
+
   chrome.runtime.sendMessage({ action: "listSessions" }, (resp) => {
     if (chrome.runtime.lastError || !resp?.success) {
-      sessionList.innerHTML = `<span class="tag">failed to load</span>`;
+      sessionList.innerHTML = "";
+      const err = document.createElement("span");
+      err.className = "tag";
+      err.textContent = "failed to load";
+      sessionList.appendChild(err);
       return;
     }
-    
+
     const sessions = resp.sessions;
-    const sessionsSection = $("sessionsSection");
-    
+    sessionList.innerHTML = "";
+
     if (sessions.length === 0) {
-      sessionsSection.style.display = "none";
+      const empty = document.createElement("span");
+      empty.className = "tag";
+      empty.style.margin = "4px 0";
+      empty.textContent = "No saved sessions yet";
+      sessionList.appendChild(empty);
       return;
     }
-    
-    sessionsSection.style.display = "block";
-    sessionList.innerHTML = "";
     
     sessions.forEach(session => {
       const item = document.createElement("div");
       item.className = "session-item";
-      
-      const date = new Date(session.updatedAt).toLocaleDateString();
-      
-      item.innerHTML = `
-        <div class="session-info">
-          <div class="session-name">${escapeHtml(session.name)}</div>
-          <div class="session-meta">${session.cookieCount} cookies · ${date}</div>
-        </div>
-        <div class="session-actions">
-          <button class="session-btn" title="Load in incognito" data-action="incognito" data-id="${session.id}">🕵️</button>
-          <button class="session-btn" title="Load in current browser" data-action="current" data-id="${session.id}">📂</button>
-          <button class="session-btn delete" title="Delete" data-action="delete" data-id="${session.id}">🗑️</button>
-        </div>
-      `;
-      
+
+      const info = document.createElement("div");
+      info.className = "session-info";
+
+      const nameEl = document.createElement("div");
+      nameEl.className = "session-name";
+      nameEl.textContent = session.name;
+
+      const meta = document.createElement("div");
+      meta.className = "session-meta";
+      meta.textContent = `${session.cookieCount} cookies · ${new Date(session.updatedAt).toLocaleDateString()}`;
+
+      info.appendChild(nameEl);
+      info.appendChild(meta);
+
+      const actions = document.createElement("div");
+      actions.className = "session-actions";
+
+      const btns = [
+        { action: "incognito", title: "Load in incognito", icon: "🕵️" },
+        { action: "current",   title: "Load in current browser", icon: "📂" },
+        { action: "rename",    title: "Rename", icon: "✏️" },
+        { action: "delete",    title: "Delete", icon: "🗑️", cls: "delete" }
+      ];
+
+      btns.forEach(({ action, title, icon, cls }) => {
+        const btn = document.createElement("button");
+        btn.className = "session-btn" + (cls ? ` ${cls}` : "");
+        btn.title = title;
+        btn.textContent = icon;
+        btn.dataset.action = action;
+        btn.dataset.id = session.id;
+        btn.dataset.name = session.name;
+        actions.appendChild(btn);
+      });
+
+      item.appendChild(info);
+      item.appendChild(actions);
       sessionList.appendChild(item);
     });
     
     // Add event listeners to session buttons
     sessionList.querySelectorAll(".session-btn").forEach(btn => {
       btn.addEventListener("click", (e) => {
-        const action = e.target.dataset.action;
-        const sessionId = e.target.dataset.id;
-        handleSessionAction(action, sessionId);
+        const { action, id, name } = e.currentTarget.dataset;
+        handleSessionAction(action, id, name);
       });
     });
   });
 }
 
-function handleSessionAction(action, sessionId) {
-  if (action === "incognito") {
-    loadSessionIncognito(sessionId);
-  } else if (action === "current") {
-    loadSessionCurrent(sessionId);
-  } else if (action === "delete") {
-    deleteSession(sessionId);
-  }
+function handleSessionAction(action, sessionId, sessionName) {
+  if (action === "incognito") loadSessionIncognito(sessionId);
+  else if (action === "current") loadSessionCurrent(sessionId);
+  else if (action === "rename") promptRenameSession(sessionId, sessionName);
+  else if (action === "delete") deleteSession(sessionId);
 }
 
-function loadSessionIncognito(sessionId) {
+function promptRenameSession(sessionId, currentName) {
+  const input = $("sessionNameInput");
+  const wrap = $("sessionInputWrap");
+  input.value = currentName;
+  wrap.dataset.renameId = sessionId;
+  wrap.style.display = "block";
+  input.focus();
+}
+
+
   showToast("Loading session in incognito...", "info");
   
   chrome.runtime.sendMessage({ action: "loadSessionIncognito", sessionId }, (resp) => {
@@ -233,6 +281,7 @@ function initSaveSessionBtn() {
     if (isVisible) {
       inputWrap.style.display = "none";
     } else {
+      delete inputWrap.dataset.renameId;
       inputWrap.style.display = "block";
       $("sessionNameInput").focus();
     }
@@ -248,7 +297,20 @@ $("btnConfirmSave").addEventListener("click", () => {
     return;
   }
   
-  saveCurrentSessionFromPopup(name);
+  const renameId = $("sessionInputWrap").dataset.renameId;
+  if (renameId) {
+    chrome.runtime.sendMessage({ action: "renameSession", sessionId: renameId, newName: name }, (resp) => {
+      if (resp?.success) {
+        showToast("Session renamed", "success");
+        loadSavedSessions();
+      } else {
+        showToast("Failed to rename: " + (resp?.message || "Unknown error"), "error");
+      }
+    });
+    delete $("sessionInputWrap").dataset.renameId;
+  } else {
+    saveCurrentSessionFromPopup(name);
+  }
   $("sessionInputWrap").style.display = "none";
   input.value = "";
 });
@@ -303,7 +365,7 @@ $("btnImportSession").addEventListener("click", async () => {
   }
 });
 
-// Helper to escape HTML
+// Helper to escape HTML — kept for any future use but session items now use textContent
 function escapeHtml(text) {
   const div = document.createElement("div");
   div.textContent = text;
@@ -313,6 +375,7 @@ function escapeHtml(text) {
 document.addEventListener("DOMContentLoaded", () => {
   $("btnIncognito").addEventListener("click", handleIncognitoClick);
   $("btnExport").addEventListener("click", handleExportClick);
+  $("btnExportCookieEditor").addEventListener("click", handleCookieEditorExportClick);
   initSaveSessionBtn();
   loadSavedSessions();
   refreshCookieStats();

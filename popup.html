@@ -515,16 +515,20 @@
       <span id="btnIncognitoText">Open in Incognito</span>
       <div class="spinner" id="spinIncognito"></div>
     </button>
-    <button class="btn btn-secondary" id="btnExport">
+    <button class="btn btn-secondary" id="btnExport" title="Export raw cookies as JSON (proprietary format)">
       <span class="btn-icon">📋</span>
       Export Cookies (JSON)
     </button>
+    <button class="btn btn-secondary" id="btnExportCookieEditor" title="Export in Cookie-Editor format — paste directly into Cookie-Editor on any browser">
+      <span class="btn-icon">🌐</span>
+      Export for Cookie-Editor
+    </button>
 
     <!-- Saved Sessions -->
-    <div class="sessions-section" id="sessionsSection" style="display: none;">
+    <div class="sessions-section" id="sessionsSection">
       <div class="status-label" style="padding: 0 20px; margin-bottom: 8px;">Saved Sessions</div>
       <div class="session-list" id="sessionList" style="max-height: 120px; overflow-y: auto; padding: 0 20px;">
-        <!-- Sessions will be injected here -->
+        <span class="tag" style="margin: 4px 0;">No saved sessions yet</span>
       </div>
       <div style="padding: 10px 20px; display: flex; gap: 8px;">
         <button class="btn btn-secondary" id="btnSaveSession" style="flex: 1;">

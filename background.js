@@ -1,7 +1,8 @@
 // background.js - Service Worker
+// importScripts makes storage.js functions available in the service worker
+importScripts("storage.js");
 
 const TWITTER_DOMAINS = ["twitter.com", "x.com"];
-const SESSION_STORE_KEY = "saved_sessions";
 
 // Key cookies needed for Twitter session
 const CRITICAL_COOKIES = [
@@ -12,6 +13,74 @@ const CRITICAL_COOKIES = [
 ];
 
 const VALID_SAME_SITE = ["strict", "lax", "none"];
+
+// ==================== COOKIE-EDITOR NORMALIZATION ====================
+// Based on research: sameSite must be "no_restriction"|"lax"|"strict"
+// storeId must be null, session+expirationDate are mutually exclusive
+function normalizeCookieForCookieEditor(c) {
+  // Normalize sameSite per Cookie-Editor schema
+  let sameSite = "no_restriction";
+  if (c.sameSite) {
+    const s = c.sameSite.toLowerCase();
+    if (s === "strict") sameSite = "strict";
+    else if (s === "lax") sameSite = "lax";
+    else sameSite = "no_restriction"; // None / unspecified / anything else
+  }
+
+  // secure must be true when sameSite is no_restriction
+  const secure = sameSite === "no_restriction" ? true : c.secure;
+
+  const normalized = {
+    domain: c.domain,
+    hostOnly: c.hostOnly ?? !c.domain.startsWith("."),
+    httpOnly: c.httpOnly,
+    name: c.name,
+    path: c.path || "/",
+    sameSite,
+    secure,
+    session: c.session ?? !c.expirationDate,
+    storeId: null,
+    value: c.value ?? ""
+  };
+
+  // Only include expirationDate if NOT a session cookie
+  if (!normalized.session && c.expirationDate) {
+    normalized.expirationDate = c.expirationDate;
+  }
+
+  return normalized;
+}
+
+async function exportForCookieEditor(sendResponse) {
+  try {
+    const cookies = await getTwitterCookies();
+    if (cookies.length === 0) {
+      sendResponse({ success: false, message: "No Twitter cookies found. Are you logged in?" });
+      return;
+    }
+    const normalized = cookies.map(normalizeCookieForCookieEditor);
+    const json = JSON.stringify(normalized, null, 2);
+
+    // Use offscreen document to write to clipboard (MV3 service worker has no DOM)
+    await ensureOffscreenDocument();
+    await chrome.runtime.sendMessage({ action: "writeClipboard", text: json });
+    await chrome.offscreen.closeDocument();
+
+    sendResponse({ success: true, count: cookies.length, message: `${cookies.length} cookies copied — paste into Cookie-Editor → Import` });
+  } catch (e) {
+    sendResponse({ success: false, message: e.message });
+  }
+}
+
+async function ensureOffscreenDocument() {
+  const existing = await chrome.offscreen.hasDocument?.();
+  if (existing) return;
+  await chrome.offscreen.createDocument({
+    url: "offscreen.html",
+    reasons: ["CLIPBOARD"],
+    justification: "Write Cookie-Editor JSON to clipboard from service worker"
+  });
+}
 
 // Fetch all Twitter cookies
 async function getTwitterCookies() {
@@ -109,77 +178,8 @@ async function getCookieInfo(sendResponse) {
 }
 
 // ==================== SESSION MANAGEMENT ====================
-
-function generateId() {
-  return Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
-}
-
-async function getSessions() {
-  try {
-    const result = await chrome.storage.local.get(SESSION_STORE_KEY);
-    return result[SESSION_STORE_KEY] || [];
-  } catch (e) {
-    console.error("Failed to get sessions:", e);
-    return [];
-  }
-}
-
-async function saveSession(name, cookies, platform = "twitter") {
-  const sessions = await getSessions();
-  const session = {
-    id: generateId(),
-    name: name.trim(),
-    platform,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    cookieCount: cookies.length,
-    cookies: cookies.map(c => ({ name: c.name, value: c.value, domain: c.domain, path: c.path, secure: c.secure, httpOnly: c.httpOnly, sameSite: c.sameSite, expirationDate: c.expirationDate }))
-  };
-  sessions.push(session);
-  await chrome.storage.local.set({ [SESSION_STORE_KEY]: sessions });
-  return session;
-}
-
-async function getSession(sessionId) {
-  const sessions = await getSessions();
-  return sessions.find(s => s.id === sessionId) || null;
-}
-
-async function deleteSession(sessionId) {
-  const sessions = await getSessions();
-  const filtered = sessions.filter(s => s.id !== sessionId);
-  await chrome.storage.local.set({ [SESSION_STORE_KEY]: filtered });
-  return filtered;
-}
-
-async function exportSession(sessionId) {
-  const session = await getSession(sessionId);
-  if (!session) throw new Error("Session not found");
-  const exportData = { ...session, exportedAt: new Date().toISOString(), exportedBy: "Twitter Session Cloner" };
-  return JSON.stringify(exportData, null, 2);
-}
-
-async function importSession(jsonString) {
-  try {
-    const data = JSON.parse(jsonString);
-    if (!data.cookies || !Array.isArray(data.cookies)) throw new Error("Invalid session file: missing cookies array");
-    const sessions = await getSessions();
-    const session = {
-      id: generateId(),
-      name: data.name || "Imported Session",
-      platform: data.platform || "twitter",
-      createdAt: data.createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      cookieCount: data.cookies.length,
-      cookies: data.cookies
-    };
-    sessions.push(session);
-    await chrome.storage.local.set({ [SESSION_STORE_KEY]: sessions });
-    return session;
-  } catch (e) {
-    throw new Error("Failed to import session: " + e.message);
-  }
-}
+// All storage functions (getSessions, saveSession, getSession, deleteSession,
+// renameSession, exportSession, importSession) are provided by storage.js
 
 async function saveCurrentSession(sessionName, sendResponse) {
   try {
@@ -282,6 +282,16 @@ async function deleteSavedSession(sessionId, sendResponse) {
   }
 }
 
+async function renameSavedSession(sessionId, newName, sendResponse) {
+  try {
+    const session = await renameSession(sessionId, newName);
+    if (!session) { sendResponse({ success: false, message: "Session not found" }); return; }
+    sendResponse({ success: true, message: "Session renamed" });
+  } catch (e) {
+    sendResponse({ success: false, message: e.message });
+  }
+}
+
 async function exportSessionToFile(sessionId, sendResponse) {
   try {
     const json = await exportSession(sessionId);
@@ -313,6 +323,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "deleteSession") { deleteSavedSession(message.sessionId, sendResponse); return true; }
   if (message.action === "exportSession") { exportSessionToFile(message.sessionId, sendResponse); return true; }
   if (message.action === "importSession") { importSessionFromFile(message.fileContent, sendResponse); return true; }
+  if (message.action === "exportForCookieEditor") { exportForCookieEditor(sendResponse); return true; }
+  if (message.action === "renameSession") { renameSavedSession(message.sessionId, message.newName, sendResponse); return true; }
 });
 
 // ==================== CONTEXT MENU ====================
