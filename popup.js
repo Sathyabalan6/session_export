@@ -1,10 +1,4 @@
 // popup.js
-// CRITICAL_COOKIES is defined once here for UI highlighting only
-const CRITICAL_COOKIES = [
-  "auth_token", "ct0", "twid", "kdt", "lang",
-  "guest_id", "guest_id_ads", "guest_id_marketing",
-  "personalization_id", "att", "_twitter_sess"
-];
 
 const $ = id => document.getElementById(id);
 
@@ -27,7 +21,113 @@ function setLoading(btnId, spinnerId, textId, loading, labelText) {
   $("loadingBar").style.width = loading ? "70%" : "0%";
 }
 
-// Load cookie info on popup open — single DOMContentLoaded at bottom
+// ==================== SITE DETECTION ====================
+
+let currentProfile = null;
+let allProfiles = {};
+
+async function initSiteDetection() {
+  // Load all profiles
+  chrome.runtime.sendMessage({ action: "listProfiles" }, (resp) => {
+    if (resp?.success) allProfiles = resp.profiles;
+    renderSiteSelector();
+  });
+
+  // Auto-detect from active tab
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    const url = tabs[0]?.url;
+    if (!url || url.startsWith("chrome://") || url.startsWith("chrome-extension://")) {
+      loadLastUsedSite();
+      return;
+    }
+    chrome.runtime.sendMessage({ action: "detectSite", url }, (resp) => {
+      if (resp?.profile) {
+        currentProfile = resp.profile;
+        updateSiteDisplay(resp.profile);
+        checkAndRequestPermission(resp.profile);
+      } else {
+        loadLastUsedSite();
+      }
+      refreshCookieStats();
+    });
+  });
+}
+
+function loadLastUsedSite() {
+  chrome.storage.local.get("siteId", ({ siteId }) => {
+    if (siteId && allProfiles[siteId]) {
+      currentProfile = allProfiles[siteId];
+      updateSiteDisplay(currentProfile);
+    }
+    refreshCookieStats();
+  });
+}
+
+function updateSiteDisplay(profile) {
+  $("siteIcon").textContent = profile.icon || "🌐";
+  $("siteName").textContent = profile.name;
+
+  const noteEl = $("siteNote");
+  if (profile.note || profile.requiresLocalStorage) {
+    noteEl.textContent = profile.note || "Auth uses localStorage — cookie cloning not supported.";
+    noteEl.style.display = "block";
+  } else {
+    noteEl.style.display = "none";
+  }
+
+  $("btnIncognito").disabled = !!profile.requiresLocalStorage;
+}
+
+function renderSiteSelector() {
+  const list = $("siteList");
+  list.innerHTML = "";
+  Object.values(allProfiles).forEach(profile => {
+    const btn = document.createElement("button");
+    btn.className = "site-chip" + (currentProfile?.id === profile.id ? " active" : "");
+    btn.textContent = `${profile.icon || "🌐"} ${profile.name}`;
+    btn.dataset.id = profile.id;
+    btn.addEventListener("click", () => selectSite(profile.id));
+    list.appendChild(btn);
+  });
+}
+
+function selectSite(siteId) {
+  chrome.runtime.sendMessage({ action: "setSite", siteId }, () => {
+    currentProfile = allProfiles[siteId];
+    updateSiteDisplay(currentProfile);
+    renderSiteSelector();
+    checkAndRequestPermission(currentProfile);
+    refreshCookieStats();
+  });
+}
+
+function checkAndRequestPermission(profile) {
+  if (!profile || profile.id === "twitter") return; // twitter has install-time permission
+  const origins = profile.domains.map(d => `https://${d.replace(/^\./, "")}/*`);
+  chrome.permissions.contains({ origins }, (has) => {
+    if (!has) showPermissionBanner(profile);
+    else $("permissionBanner").style.display = "none";
+  });
+}
+
+function showPermissionBanner(profile) {
+  const banner = $("permissionBanner");
+  banner.style.display = "block";
+  $("permissionBannerText").textContent = `Grant access to ${profile.name} cookies`;
+  $("btnGrantPermission").onclick = () => {
+    chrome.runtime.sendMessage({ action: "requestPermission", domains: profile.domains }, (resp) => {
+      if (resp?.success) {
+        banner.style.display = "none";
+        showToast(`✓ Access granted for ${profile.name}`, "success");
+        refreshCookieStats();
+      } else {
+        showToast("Permission denied — cannot read cookies for this site.", "error");
+      }
+    });
+  };
+}
+
+// ==================== COOKIE STATS ====================
 
 async function refreshCookieStats() {
   $("criticalCount").textContent = "–";
@@ -39,9 +139,9 @@ async function refreshCookieStats() {
     if (chrome.runtime.lastError || !resp) {
       $("criticalCount").textContent = "0";
       $("totalCount").textContent = "0";
-      $("cookieTags").innerHTML = `<span class="tag">no twitter session found</span>`;
+      $("cookieTags").innerHTML = `<span class="tag">no session found</span>`;
       $("statusDot").className = "dot";
-      showToast("Log in to Twitter first, then reopen this popup.", "error", 6000);
+      showToast("Log in to the site first, then reopen this popup.", "error", 6000);
       return;
     }
 
@@ -49,46 +149,43 @@ async function refreshCookieStats() {
     $("totalCount").textContent = resp.total;
     $("statusDot").className = resp.critical > 0 ? "dot active" : "dot";
 
-    // Render cookie tags
     const container = $("cookieTags");
     container.innerHTML = "";
-    if (resp.names.length === 0) {
-      container.innerHTML = `<span class="tag">none found</span>`;
+    if (!resp.names || resp.names.length === 0) {
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = "none found";
+      container.appendChild(tag);
     } else {
+      const criticalSet = new Set(resp.profile ? (allProfiles[resp.profile.id]?.criticalCookies || []) : []);
       resp.names.forEach(name => {
         const tag = document.createElement("span");
-        tag.className = CRITICAL_COOKIES.includes(name) ? "tag critical" : "tag";
+        tag.className = criticalSet.has(name) ? "tag critical" : "tag";
         tag.textContent = name;
         container.appendChild(tag);
       });
     }
 
-    if (resp.critical === 0) {
-      showToast("No auth cookies found. Are you logged in to Twitter?", "error");
+    if (resp.critical === 0 && !resp.profile?.requiresLocalStorage) {
+      showToast("No auth cookies found. Are you logged in?", "error");
       $("btnIncognito").disabled = true;
-    } else {
+    } else if (!resp.profile?.requiresLocalStorage) {
       showToast(`Found ${resp.critical} auth cookies — ready to clone!`, "success", 2500);
       $("btnIncognito").disabled = false;
     }
   });
 }
 
-// Open Incognito button handler
+// ==================== ACTIONS ====================
+
 function handleIncognitoClick() {
   setLoading("btnIncognito", "spinIncognito", "btnIncognitoText", true, "Open in Incognito");
-
   chrome.runtime.sendMessage({ action: "openIncognito" }, (resp) => {
     setLoading("btnIncognito", "spinIncognito", "btnIncognitoText", false, "Open in Incognito");
     $("loadingBar").style.width = "0%";
-
-    if (chrome.runtime.lastError) {
-      showToast("Error: " + chrome.runtime.lastError.message, "error");
-      return;
-    }
-
-    if (resp && resp.success) {
+    if (chrome.runtime.lastError) { showToast("Error: " + chrome.runtime.lastError.message, "error"); return; }
+    if (resp?.success) {
       showToast(`✓ ${resp.message}`, "success");
-      // Refresh stats after cloning (cookies may have changed)
       setTimeout(refreshCookieStats, 1000);
     } else {
       showToast("❌ " + (resp?.message || "Unknown error"), "error", 5000);
@@ -96,51 +193,43 @@ function handleIncognitoClick() {
   });
 }
 
-// Export Cookies button handler
 function handleExportClick() {
   chrome.runtime.sendMessage({ action: "exportCookies" }, (resp) => {
     if (chrome.runtime.lastError || !resp?.success) {
       showToast("Export failed: " + (resp?.message || "Unknown error"), "error");
       return;
     }
-
-    // Copy JSON to clipboard
     const json = JSON.stringify(resp.data, null, 2);
     navigator.clipboard.writeText(json).then(() => {
       showToast(`✓ ${resp.count} cookies copied to clipboard as JSON`, "success");
     }).catch(() => {
-      // Fallback: open in new tab
       const blob = new Blob([json], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       chrome.tabs.create({ url });
-      showToast(`✓ Opened cookie JSON in new tab`, "info");
+      showToast("✓ Opened cookie JSON in new tab", "info");
     });
   });
 }
-// Export for Cookie-Editor button handler
+
 function handleCookieEditorExportClick() {
   showToast("Preparing Cookie-Editor export...", "info");
   chrome.runtime.sendMessage({ action: "exportForCookieEditor" }, (resp) => {
-    if (chrome.runtime.lastError) {
-      showToast("Error: " + chrome.runtime.lastError.message, "error");
-      return;
-    }
-    if (resp?.success) {
-      showToast(`✓ ${resp.message}`, "success", 5000);
-    } else {
-      showToast("❌ " + (resp?.message || "Export failed"), "error");
-    }
+    if (chrome.runtime.lastError) { showToast("Error: " + chrome.runtime.lastError.message, "error"); return; }
+    if (resp?.success) showToast(`✓ ${resp.message}`, "success", 5000);
+    else showToast("❌ " + (resp?.message || "Export failed"), "error");
   });
 }
 
+// ==================== SESSIONS ====================
 
 async function loadSavedSessions() {
   const sessionList = $("sessionList");
   if (!sessionList) return;
 
   chrome.runtime.sendMessage({ action: "listSessions" }, (resp) => {
+    sessionList.innerHTML = "";
+
     if (chrome.runtime.lastError || !resp?.success) {
-      sessionList.innerHTML = "";
       const err = document.createElement("span");
       err.className = "tag";
       err.textContent = "failed to load";
@@ -148,10 +237,7 @@ async function loadSavedSessions() {
       return;
     }
 
-    const sessions = resp.sessions;
-    sessionList.innerHTML = "";
-
-    if (sessions.length === 0) {
+    if (resp.sessions.length === 0) {
       const empty = document.createElement("span");
       empty.className = "tag";
       empty.style.margin = "4px 0";
@@ -159,8 +245,8 @@ async function loadSavedSessions() {
       sessionList.appendChild(empty);
       return;
     }
-    
-    sessions.forEach(session => {
+
+    resp.sessions.forEach(session => {
       const item = document.createElement("div");
       item.className = "session-item";
 
@@ -173,7 +259,9 @@ async function loadSavedSessions() {
 
       const meta = document.createElement("div");
       meta.className = "session-meta";
-      meta.textContent = `${session.cookieCount} cookies · ${new Date(session.updatedAt).toLocaleDateString()}`;
+      const siteProfile = allProfiles[session.platform];
+      const siteLabel = siteProfile ? `${siteProfile.icon} ${siteProfile.name}` : session.platform;
+      meta.textContent = `${siteLabel} · ${session.cookieCount} cookies · ${new Date(session.updatedAt).toLocaleDateString()}`;
 
       info.appendChild(nameEl);
       info.appendChild(meta);
@@ -181,14 +269,12 @@ async function loadSavedSessions() {
       const actions = document.createElement("div");
       actions.className = "session-actions";
 
-      const btns = [
+      [
         { action: "incognito", title: "Load in incognito", icon: "🕵️" },
         { action: "current",   title: "Load in current browser", icon: "📂" },
         { action: "rename",    title: "Rename", icon: "✏️" },
         { action: "delete",    title: "Delete", icon: "🗑️", cls: "delete" }
-      ];
-
-      btns.forEach(({ action, title, icon, cls }) => {
+      ].forEach(({ action, title, icon, cls }) => {
         const btn = document.createElement("button");
         btn.className = "session-btn" + (cls ? ` ${cls}` : "");
         btn.title = title;
@@ -203,8 +289,7 @@ async function loadSavedSessions() {
       item.appendChild(actions);
       sessionList.appendChild(item);
     });
-    
-    // Add event listeners to session buttons
+
     sessionList.querySelectorAll(".session-btn").forEach(btn => {
       btn.addEventListener("click", (e) => {
         const { action, id, name } = e.currentTarget.dataset;
@@ -221,6 +306,31 @@ function handleSessionAction(action, sessionId, sessionName) {
   else if (action === "delete") deleteSession(sessionId);
 }
 
+function loadSessionIncognito(sessionId) {
+  showToast("Loading session in incognito...", "info");
+  chrome.runtime.sendMessage({ action: "loadSessionIncognito", sessionId }, (resp) => {
+    if (chrome.runtime.lastError) { showToast("Error: " + chrome.runtime.lastError.message, "error"); return; }
+    if (resp?.success) showToast(`✓ ${resp.message}`, "success");
+    else showToast("❌ " + (resp?.message || "Failed to load session"), "error");
+  });
+}
+
+function loadSessionCurrent(sessionId) {
+  showToast("Loading cookies into current browser...", "info");
+  chrome.runtime.sendMessage({ action: "loadSessionCurrent", sessionId }, (resp) => {
+    if (chrome.runtime.lastError) { showToast("Error: " + chrome.runtime.lastError.message, "error"); return; }
+    if (resp?.success) showToast(`✓ ${resp.message}`, "success");
+    else showToast("❌ " + (resp?.message || "Failed to load session"), "error");
+  });
+}
+
+function deleteSession(sessionId) {
+  chrome.runtime.sendMessage({ action: "deleteSession", sessionId }, (resp) => {
+    if (resp?.success) { showToast("Session deleted", "success"); loadSavedSessions(); }
+    else showToast("Failed to delete session", "error");
+  });
+}
+
 function promptRenameSession(sessionId, currentName) {
   const input = $("sessionNameInput");
   const wrap = $("sessionInputWrap");
@@ -230,50 +340,6 @@ function promptRenameSession(sessionId, currentName) {
   input.focus();
 }
 
-
-  showToast("Loading session in incognito...", "info");
-  
-  chrome.runtime.sendMessage({ action: "loadSessionIncognito", sessionId }, (resp) => {
-    if (chrome.runtime.lastError) {
-      showToast("Error: " + chrome.runtime.lastError.message, "error");
-      return;
-    }
-    if (resp?.success) {
-      showToast(`✓ ${resp.message}`, "success");
-    } else {
-      showToast("❌ " + (resp?.message || "Failed to load session"), "error");
-    }
-  });
-}
-
-function loadSessionCurrent(sessionId) {
-  showToast("Loading cookies into current browser...", "info");
-  
-  chrome.runtime.sendMessage({ action: "loadSessionCurrent", sessionId }, (resp) => {
-    if (chrome.runtime.lastError) {
-      showToast("Error: " + chrome.runtime.lastError.message, "error");
-      return;
-    }
-    if (resp?.success) {
-      showToast(`✓ ${resp.message}`, "success");
-    } else {
-      showToast("❌ " + (resp?.message || "Failed to load session"), "error");
-    }
-  });
-}
-
-function deleteSession(sessionId) {
-  chrome.runtime.sendMessage({ action: "deleteSession", sessionId }, (resp) => {
-    if (resp?.success) {
-      showToast("Session deleted", "success");
-      loadSavedSessions();
-    } else {
-      showToast("Failed to delete session", "error");
-    }
-  });
-}
-
-// Save current session
 function initSaveSessionBtn() {
   $("btnSaveSession").addEventListener("click", () => {
     const inputWrap = $("sessionInputWrap");
@@ -287,25 +353,17 @@ function initSaveSessionBtn() {
     }
   });
 }
-// In popup.js, add this after the existing btnSaveSession listener:
+
 $("btnConfirmSave").addEventListener("click", () => {
   const input = $("sessionNameInput");
   const name = input.value.trim();
-  
-  if (!name) {
-    showToast("Please enter a session name", "error");
-    return;
-  }
-  
+  if (!name) { showToast("Please enter a session name", "error"); return; }
+
   const renameId = $("sessionInputWrap").dataset.renameId;
   if (renameId) {
     chrome.runtime.sendMessage({ action: "renameSession", sessionId: renameId, newName: name }, (resp) => {
-      if (resp?.success) {
-        showToast("Session renamed", "success");
-        loadSavedSessions();
-      } else {
-        showToast("Failed to rename: " + (resp?.message || "Unknown error"), "error");
-      }
+      if (resp?.success) { showToast("Session renamed", "success"); loadSavedSessions(); }
+      else showToast("Failed to rename: " + (resp?.message || "Unknown error"), "error");
     });
     delete $("sessionInputWrap").dataset.renameId;
   } else {
@@ -323,60 +381,74 @@ $("btnCancelSave").addEventListener("click", () => {
 function saveCurrentSessionFromPopup(name) {
   showToast("Saving session...", "info");
   chrome.runtime.sendMessage({ action: "saveSession", name }, (saveResp) => {
-    if (chrome.runtime.lastError) {
-      showToast("Error: " + chrome.runtime.lastError.message, "error");
-      return;
-    }
-    if (saveResp?.success) {
-      showToast(`✓ Session "${name}" saved`, "success");
-      loadSavedSessions();
-    } else {
-      showToast("Failed to save session: " + (saveResp?.message || "Unknown error"), "error");
-    }
+    if (chrome.runtime.lastError) { showToast("Error: " + chrome.runtime.lastError.message, "error"); return; }
+    if (saveResp?.success) { showToast(`✓ Session "${name}" saved`, "success"); loadSavedSessions(); }
+    else showToast("Failed to save session: " + (saveResp?.message || "Unknown error"), "error");
   });
 }
 
-// Import session from file
 $("btnImportSession").addEventListener("click", async () => {
   try {
-    // Create file input
     const input = document.createElement("input");
     input.type = "file";
     input.accept = ".json";
-    
     input.onchange = async (e) => {
       const file = e.target.files[0];
       if (!file) return;
-      
       const text = await file.text();
       chrome.runtime.sendMessage({ action: "importSession", fileContent: text }, (resp) => {
-        if (resp?.success) {
-          showToast(`✓ Imported session "${resp.session.name}"`, "success");
-          loadSavedSessions();
-        } else {
-          showToast("Import failed: " + (resp?.message || "Unknown error"), "error");
-        }
+        if (resp?.success) { showToast(`✓ Imported session "${resp.session.name}"`, "success"); loadSavedSessions(); }
+        else showToast("Import failed: " + (resp?.message || "Unknown error"), "error");
       });
     };
-    
     input.click();
   } catch (e) {
     showToast("Failed to open file picker", "error");
   }
 });
 
-// Helper to escape HTML — kept for any future use but session items now use textContent
-function escapeHtml(text) {
-  const div = document.createElement("div");
-  div.textContent = text;
-  return div.innerHTML;
-}
+// ==================== CUSTOM DOMAIN ====================
+
+$("btnAddCustomDomain").addEventListener("click", () => {
+  const wrap = $("customDomainWrap");
+  wrap.style.display = wrap.style.display === "block" ? "none" : "block";
+  if (wrap.style.display === "block") $("customDomainInput").focus();
+});
+
+$("btnConfirmCustomDomain").addEventListener("click", () => {
+  const name = $("customDomainName").value.trim();
+  const domain = $("customDomainInput").value.trim();
+  if (!domain) { showToast("Please enter a domain", "error"); return; }
+  const displayName = name || domain;
+  chrome.runtime.sendMessage({ action: "addCustomDomain", name: displayName, domain }, (resp) => {
+    if (resp?.success) {
+      showToast(`✓ Added ${displayName}`, "success");
+      $("customDomainWrap").style.display = "none";
+      $("customDomainInput").value = "";
+      $("customDomainName").value = "";
+      // Reload profiles and re-render
+      chrome.runtime.sendMessage({ action: "listProfiles" }, (r) => {
+        if (r?.success) { allProfiles = r.profiles; renderSiteSelector(); }
+      });
+    } else {
+      showToast("Failed: " + (resp?.message || "Unknown error"), "error");
+    }
+  });
+});
+
+$("btnCancelCustomDomain").addEventListener("click", () => {
+  $("customDomainWrap").style.display = "none";
+  $("customDomainInput").value = "";
+  $("customDomainName").value = "";
+});
+
+// ==================== INIT ====================
 
 document.addEventListener("DOMContentLoaded", () => {
   $("btnIncognito").addEventListener("click", handleIncognitoClick);
   $("btnExport").addEventListener("click", handleExportClick);
   $("btnExportCookieEditor").addEventListener("click", handleCookieEditorExportClick);
   initSaveSessionBtn();
+  initSiteDetection();
   loadSavedSessions();
-  refreshCookieStats();
 });

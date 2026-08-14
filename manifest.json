@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Twitter Session Cloner",
-  "version": "1.1.0",
-  "description": "Copy Twitter/X session cookies and open in incognito mode",
+  "name": "Session Cloner",
+  "version": "2.0.0",
+  "description": "Clone your browser session cookies into incognito or export for cross-browser transfer. Supports Twitter/X, Reddit, GitHub, Instagram, LinkedIn, Google, and custom sites.",
   "permissions": [
     "cookies",
     "tabs",
@@ -12,9 +12,28 @@
     "contextMenus",
     "offscreen"
   ],
+  "optional_permissions": [
+    "cookies"
+  ],
   "host_permissions": [
     "https://twitter.com/*",
     "https://x.com/*"
+  ],
+  "optional_host_permissions": [
+    "https://reddit.com/*",
+    "https://www.reddit.com/*",
+    "https://redd.it/*",
+    "https://github.com/*",
+    "https://gist.github.com/*",
+    "https://instagram.com/*",
+    "https://www.instagram.com/*",
+    "https://linkedin.com/*",
+    "https://www.linkedin.com/*",
+    "https://google.com/*",
+    "https://mail.google.com/*",
+    "https://accounts.google.com/*",
+    "https://discord.com/*",
+    "https://*/*"
   ],
   "action": {
     "default_popup": "popup.html",
