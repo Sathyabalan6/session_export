@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Twitter Session Cloner</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@500;700;800&display=swap"
+    rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --surface: #111118;
+      --border: #1e1e2e;
+      --accent: #1d9bf0;
+      --accent-dim: #1d9bf022;
+      --accent-glow: #1d9bf044;
+      --text: #e8e8f0;
+      --text-dim: #6b6b80;
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --error: #ef4444;
+      --radius: 10px;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 340px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Syne', sans-serif;
+      overflow: hidden;
+    }
+
+    /* Header */
+    .header {
+      padding: 20px 20px 14px;
+      border-bottom: 1px solid var(--border);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .header::before {
+      content: '';
+      position: absolute;
+      top: -30px;
+      right: -30px;
+      width: 120px;
+      height: 120px;
+      background: radial-gradient(circle, var(--accent-glow), transparent 70%);
+      pointer-events: none;
+    }
+
+    .logo-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 4px;
+    }
+
+    .logo-icon {
+      width: 34px;
+      height: 34px;
+      background: var(--accent);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      flex-shrink: 0;
+      box-shadow: 0 0 16px var(--accent-glow);
+    }
+
+    .title {
+      font-size: 17px;
+      font-weight: 800;
+      letter-spacing: -0.3px;
+      color: var(--text);
+    }
+
+    .subtitle {
+      font-size: 11px;
+      color: var(--text-dim);
+      font-family: 'Space Mono', monospace;
+      letter-spacing: 0.5px;
+    }
+
+    /* Cookie status */
+    .status-section {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .status-label {
+      font-size: 10px;
+      font-family: 'Space Mono', monospace;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--text-dim);
+      margin-bottom: 10px;
+    }
+
+    .cookie-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .cookie-stat {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .cookie-stat.highlight {
+      border-color: var(--accent);
+      background: var(--accent-dim);
+    }
+
+    .cookie-stat .num {
+      font-size: 22px;
+      font-weight: 800;
+      color: var(--text);
+      line-height: 1;
+      font-family: 'Space Mono', monospace;
+    }
+
+    .cookie-stat.highlight .num {
+      color: var(--accent);
+    }
+
+    .cookie-stat .lbl {
+      font-size: 10px;
+      color: var(--text-dim);
+      margin-top: 3px;
+      font-family: 'Space Mono', monospace;
+    }
+
+    /* Cookie list */
+    .cookie-list-wrap {
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .cookie-list-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .cookie-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      max-height: 68px;
+      overflow-y: auto;
+    }
+
+    .cookie-tags::-webkit-scrollbar {
+      width: 3px;
+    }
+
+    .cookie-tags::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 2px;
+    }
+
+    .tag {
+      font-family: 'Space Mono', monospace;
+      font-size: 9px;
+      padding: 3px 7px;
+      border-radius: 4px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+    }
+
+    .tag.critical {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--accent-dim);
+    }
+
+    /* Actions */
+    .actions {
+      padding: 14px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .btn {
+      width: 100%;
+      padding: 12px 16px;
+      border-radius: var(--radius);
+      border: none;
+      cursor: pointer;
+      font-family: 'Syne', sans-serif;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.18s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: white;
+      box-shadow: 0 4px 20px var(--accent-glow);
+    }
+
+    .btn-primary:hover {
+      background: #1a8cd8;
+      box-shadow: 0 4px 28px #1d9bf066;
+      transform: translateY(-1px);
+    }
+
+    .btn-primary:active {
+      transform: translateY(0);
+    }
+
+    .btn-secondary {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--accent-dim);
+    }
+
+    .btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      transform: none !important;
+    }
+
+    .btn-icon {
+      font-size: 16px;
+    }
+
+    /* Spinner */
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      display: none;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    /* Toast */
+    .toast {
+      margin: 0 20px 14px;
+      padding: 10px 14px;
+      border-radius: var(--radius);
+      font-size: 12px;
+      font-family: 'Space Mono', monospace;
+      display: none;
+      animation: fadeIn 0.25s ease;
+      line-height: 1.5;
+    }
+
+    .toast.success {
+      background: #22c55e18;
+      border: 1px solid #22c55e44;
+      color: var(--success);
+    }
+
+    .toast.error {
+      background: #ef444418;
+      border: 1px solid #ef444444;
+      color: var(--error);
+    }
+
+    .toast.info {
+      background: var(--accent-dim);
+      border: 1px solid var(--accent);
+      color: var(--accent);
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(4px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    /* Footer */
+    .footer {
+      padding: 10px 20px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .footer-note {
+      font-size: 9px;
+      color: var(--text-dim);
+      font-family: 'Space Mono', monospace;
+    }
+
+    .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--text-dim);
+    }
+
+    .dot.active {
+      background: var(--success);
+      box-shadow: 0 0 6px var(--success);
+    }
+
+    /* Loading overlay */
+    #loadingBar {
+      height: 2px;
+      background: linear-gradient(90deg, var(--accent), #7c3aed);
+      width: 0%;
+      transition: width 0.4s ease;
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+
+    /* Sessions */
+    .sessions-section {
+      border-top: 1px solid var(--border);
+      padding-top: 12px;
+    }
+
+    .session-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 6px;
+    }
+
+    .session-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .session-name {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .session-meta {
+      font-size: 9px;
+      color: var(--text-dim);
+      font-family: 'Space Mono', monospace;
+      margin-top: 2px;
+    }
+
+    .session-actions {
+      display: flex;
+      gap: 4px;
+    }
+
+    .session-btn {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      cursor: pointer;
+      font-size: 14px;
+      padding: 4px 6px;
+      border-radius: 4px;
+      transition: all 0.15s;
+    }
+
+    .session-btn:hover {
+      background: var(--accent-dim);
+      color: var(--accent);
+    }
+
+    .session-btn.delete:hover {
+      background: #ef444418;
+      color: var(--error);
+    }
+
+    .session-input-wrap {
+      display: none;
+      padding: 8px 20px 12px;
+    }
+
+    .session-input-wrap input {
+      width: 100%;
+      padding: 8px 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-family: 'Space Mono', monospace;
+      font-size: 12px;
+      outline: none;
+    }
+
+    .session-input-wrap input:focus {
+      border-color: var(--accent);
+    }
+
+    .session-input-wrap .input-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .session-input-wrap .input-actions button {
+      flex: 1;
+      padding: 6px;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      font-family: 'Syne', sans-serif;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .session-input-wrap .btn-save {
+      background: var(--accent);
+      color: white;
+    }
+
+    .session-input-wrap .btn-cancel {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+  </style>
+</head>
+
+<body>
+
+  <div id="loadingBar"></div>
+
+  <!-- Header -->
+  <div class="header">
+    <div class="logo-row">
+      <div class="logo-icon">𝕏</div>
+      <div>
+        <div class="title">Session Cloner</div>
+        <div class="subtitle">twitter / x.com</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cookie Status -->
+  <div class="status-section">
+    <div class="status-label">Session Status</div>
+    <div class="cookie-grid">
+      <div class="cookie-stat highlight">
+        <div class="num" id="criticalCount">–</div>
+        <div class="lbl">auth cookies</div>
+      </div>
+      <div class="cookie-stat">
+        <div class="num" id="totalCount">–</div>
+        <div class="lbl">total cookies</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cookie Tags -->
+  <div class="cookie-list-wrap">
+    <div class="cookie-list-header">
+      <div class="status-label" style="margin-bottom:0">Detected Cookies</div>
+    </div>
+    <div class="cookie-tags" id="cookieTags">
+      <span class="tag">scanning...</span>
+    </div>
+  </div>
+
+  <!-- Actions -->
+  <div class="actions">
+    <button class="btn btn-primary" id="btnIncognito">
+      <span class="btn-icon">🕵️</span>
+      <span id="btnIncognitoText">Open in Incognito</span>
+      <div class="spinner" id="spinIncognito"></div>
+    </button>
+    <button class="btn btn-secondary" id="btnExport">
+      <span class="btn-icon">📋</span>
+      Export Cookies (JSON)
+    </button>
+
+    <!-- Saved Sessions -->
+    <div class="sessions-section" id="sessionsSection" style="display: none;">
+      <div class="status-label" style="padding: 0 20px; margin-bottom: 8px;">Saved Sessions</div>
+      <div class="session-list" id="sessionList" style="max-height: 120px; overflow-y: auto; padding: 0 20px;">
+        <!-- Sessions will be injected here -->
+      </div>
+      <div style="padding: 10px 20px; display: flex; gap: 8px;">
+        <button class="btn btn-secondary" id="btnSaveSession" style="flex: 1;">
+          <span class="btn-icon">💾</span> Save Current
+        </button>
+        <button class="btn btn-secondary" id="btnImportSession" style="flex: 1;">
+          <span class="btn-icon">📥</span> Import
+        </button>
+      </div>
+    </div>
+
+    <!-- Save Session Input -->
+    <div class="session-input-wrap" id="sessionInputWrap">
+      <input type="text" id="sessionNameInput" placeholder="Session name (e.g., Work, Personal)" maxlength="50">
+      <div class="input-actions">
+        <button class="btn-save" id="btnConfirmSave">Save Session</button>
+        <button class="btn-cancel" id="btnCancelSave">Cancel</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <div class="footer-note">cookies are not stored or transmitted</div>
+    <div class="dot" id="statusDot"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+
+</html>
