@@ -103,7 +103,7 @@ function selectSite(siteId) {
 
 function checkAndRequestPermission(profile) {
   if (!profile || profile.id === "twitter") return; // twitter has install-time permission
-  const origins = profile.domains.map(d => `https://${d.replace(/^\./, "")}/*`);
+  const origins = [...new Set(profile.domains.map(d => `https://${d.replace(/^\./, "")}/*`))];
   chrome.permissions.contains({ origins }, (has) => {
     if (!has) showPermissionBanner(profile);
     else $("permissionBanner").style.display = "none";

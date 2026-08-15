@@ -82,7 +82,7 @@ async function getCookieInfo(sendResponse) {
       total: cookies.length,
       critical: critical.length,
       names: cookies.map(c => c.name),
-      profile: { id: profile.id, name: profile.name, icon: profile.icon, note: profile.note || null, requiresLocalStorage: profile.requiresLocalStorage || false }
+      profile: { id: profile.id, name: profile.name, icon: profile.icon, domains: profile.domains, note: profile.note || null, requiresLocalStorage: profile.requiresLocalStorage || false }
     });
   } catch (e) {
     sendResponse({ total: 0, critical: 0, names: [], error: e.message });
@@ -412,7 +412,7 @@ async function handleDetectSite(url, sendResponse) {
     const profiles = getAllProfiles(customs);
     const profile = detectSiteFromUrl(url, profiles);
     if (profile) await chrome.storage.local.set({ siteId: profile.id });
-    sendResponse({ success: true, profile: profile ? { id: profile.id, name: profile.name, icon: profile.icon, note: profile.note || null, requiresLocalStorage: profile.requiresLocalStorage || false } : null });
+    sendResponse({ success: true, profile: profile ? { id: profile.id, name: profile.name, icon: profile.icon, domains: profile.domains, note: profile.note || null, requiresLocalStorage: profile.requiresLocalStorage || false } : null });
   } catch (e) {
     sendResponse({ success: false, message: e.message });
   }
