@@ -119,18 +119,24 @@ function normalizeCookieForCookieEditor(c) {
 // ==================== COOKIE SET HELPER ====================
 
 async function setCookieInStore(cookie, storeId) {
-  const url = `https://${cookie.domain.replace(/^\./, "")}${cookie.path}`;
+  const cleanDomain = cookie.domain.replace(/^\./, "");
+  const path = cookie.path && cookie.path.startsWith("/") ? cookie.path : `/${cookie.path || ""}`;
+  const protocol = cookie.secure ? "https" : "http";
+  const url = `${protocol}://${cleanDomain}${path}`;
   const params = {
     url, name: cookie.name, value: cookie.value, domain: cookie.domain,
-    path: cookie.path, secure: cookie.secure, httpOnly: cookie.httpOnly,
-    expirationDate: cookie.expirationDate, storeId
+    path: cookie.path || "/", secure: !!cookie.secure, httpOnly: !!cookie.httpOnly,
+    expirationDate: cookie.expirationDate
   };
-  if (cookie.sameSite && VALID_SAME_SITE.includes(cookie.sameSite)) params.sameSite = cookie.sameSite;
+  if (storeId) params.storeId = storeId;
+  if (cookie.sameSite && VALID_SAME_SITE.includes(cookie.sameSite.toLowerCase())) {
+    params.sameSite = cookie.sameSite.toLowerCase();
+  }
   try {
     await chrome.cookies.set(params);
     return true;
   } catch (e) {
-    console.warn(`Could not set cookie: ${cookie.name}`, e.message);
+    console.warn(`Could not set cookie ${cookie.name} on ${url}:`, e.message);
     return false;
   }
 }
@@ -162,7 +168,7 @@ async function openIncognitoWithCookies(sendResponse) {
 
     let storeId = null;
     try {
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 150));
       const cookieStores = await chrome.cookies.getAllCookieStores();
       const tabs = await chrome.tabs.query({ windowId: incognitoWindowId });
       const tabId = tabs[0]?.id;
@@ -222,8 +228,10 @@ async function exportForCookieEditor(sendResponse) {
     const json = JSON.stringify(normalized, null, 2);
     await ensureOffscreenDocument();
     await chrome.runtime.sendMessage({ action: "writeClipboard", text: json });
-    await chrome.offscreen.closeDocument();
-    sendResponse({ success: true, count: cookies.length, message: `${cookies.length} cookies copied — paste into Cookie-Editor → Import` });
+    if (await chrome.offscreen.hasDocument?.()) {
+      await chrome.offscreen.closeDocument();
+    }
+    sendResponse({ success: true, count: cookies.length, data: normalized, message: `${cookies.length} cookies copied — paste into Cookie-Editor → Import` });
   } catch (e) {
     sendResponse({ success: false, message: e.message });
   }
@@ -234,7 +242,7 @@ async function ensureOffscreenDocument() {
   if (existing) return;
   await chrome.offscreen.createDocument({
     url: "offscreen.html",
-    reasons: ["CLIPBOARD"],
+    reasons: [chrome.offscreen.Reason.CLIPBOARD || "CLIPBOARD"],
     justification: "Write Cookie-Editor JSON to clipboard from service worker"
   });
 }
@@ -274,7 +282,7 @@ async function loadSessionAsIncognito(sessionId, sendResponse) {
     const incognitoWindowId = incognitoWindow.id;
     let storeId = null;
     try {
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 150));
       const cookieStores = await chrome.cookies.getAllCookieStores();
       const tabs = await chrome.tabs.query({ windowId: incognitoWindowId });
       const tabId = tabs[0]?.id;
@@ -286,16 +294,8 @@ async function loadSessionAsIncognito(sessionId, sendResponse) {
     let successCount = 0;
     const errors = [];
     for (const cookie of session.cookies) {
-      const url = `https://${cookie.domain.replace(/^\./, "")}${cookie.path}`;
-      try {
-        await chrome.cookies.set({
-          url, name: cookie.name, value: cookie.value, domain: cookie.domain, path: cookie.path,
-          secure: cookie.secure, httpOnly: cookie.httpOnly,
-          sameSite: cookie.sameSite && VALID_SAME_SITE.includes(cookie.sameSite) ? cookie.sameSite : undefined,
-          expirationDate: cookie.expirationDate, storeId
-        });
-        successCount++;
-      } catch (e) { errors.push(cookie.name); }
+      const result = await setCookieInStore(cookie, storeId);
+      if (result) successCount++; else errors.push(cookie.name);
     }
     const loginUrl = profile?.loginUrl || `https://${session.cookies[0]?.domain?.replace(/^\./, "") || ""}`;
     const tabs = await chrome.tabs.query({ windowId: incognitoWindowId });
@@ -313,16 +313,8 @@ async function loadSessionToCurrentBrowser(sessionId, sendResponse) {
     let successCount = 0;
     const errors = [];
     for (const cookie of session.cookies) {
-      const url = `https://${cookie.domain.replace(/^\./, "")}${cookie.path}`;
-      try {
-        await chrome.cookies.set({
-          url, name: cookie.name, value: cookie.value, domain: cookie.domain, path: cookie.path,
-          secure: cookie.secure, httpOnly: cookie.httpOnly,
-          sameSite: cookie.sameSite && VALID_SAME_SITE.includes(cookie.sameSite) ? cookie.sameSite : undefined,
-          expirationDate: cookie.expirationDate
-        });
-        successCount++;
-      } catch (e) { errors.push(cookie.name); }
+      const result = await setCookieInStore(cookie, null);
+      if (result) successCount++; else errors.push(cookie.name);
     }
     sendResponse({ success: true, totalCookies: session.cookies.length, successCount, failedCookies: errors, message: `Loaded ${successCount}/${session.cookies.length} cookies into current browser` });
   } catch (e) {

@@ -102,7 +102,10 @@ function selectSite(siteId) {
 }
 
 function checkAndRequestPermission(profile) {
-  if (!profile || profile.id === "twitter") return; // twitter has install-time permission
+  if (!profile || profile.id === "twitter") {
+    $("permissionBanner").style.display = "none";
+    return;
+  }
   const origins = [...new Set(profile.domains.map(d => `https://${d.replace(/^\./, "")}/*`))];
   chrome.permissions.contains({ origins }, (has) => {
     if (!has) showPermissionBanner(profile);
@@ -112,11 +115,17 @@ function checkAndRequestPermission(profile) {
 
 function showPermissionBanner(profile) {
   const banner = $("permissionBanner");
-  banner.style.display = "block";
+  banner.style.display = "flex";
   $("permissionBannerText").textContent = `Grant access to ${profile.name} cookies`;
-  $("btnGrantPermission").onclick = () => {
-    chrome.runtime.sendMessage({ action: "requestPermission", domains: profile.domains }, (resp) => {
-      if (resp?.success) {
+  $("btnGrantPermission").onclick = async () => {
+    const origins = [...new Set(profile.domains.map(d => `https://${d.replace(/^\./, "")}/*`))];
+    await chrome.storage.local.set({ siteId: profile.id });
+    chrome.permissions.request({ origins }, (granted) => {
+      if (chrome.runtime.lastError) {
+        showToast("Error: " + chrome.runtime.lastError.message, "error");
+        return;
+      }
+      if (granted) {
         banner.style.display = "none";
         showToast(`✓ Access granted for ${profile.name}`, "success");
         refreshCookieStats();
@@ -125,6 +134,15 @@ function showPermissionBanner(profile) {
       }
     });
   };
+}
+
+if (chrome.permissions?.onAdded) {
+  chrome.permissions.onAdded.addListener(() => {
+    if (currentProfile) {
+      checkAndRequestPermission(currentProfile);
+      refreshCookieStats();
+    }
+  });
 }
 
 // ==================== COOKIE STATS ====================
@@ -193,6 +211,19 @@ function handleIncognitoClick() {
   });
 }
 
+function downloadJsonFile(filename, data) {
+  const jsonStr = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+  const blob = new Blob([jsonStr], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
 function handleExportClick() {
   chrome.runtime.sendMessage({ action: "exportCookies" }, (resp) => {
     if (chrome.runtime.lastError || !resp?.success) {
@@ -200,14 +231,13 @@ function handleExportClick() {
       return;
     }
     const json = JSON.stringify(resp.data, null, 2);
-    navigator.clipboard.writeText(json).then(() => {
-      showToast(`✓ ${resp.count} cookies copied to clipboard as JSON`, "success");
-    }).catch(() => {
-      const blob = new Blob([json], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      chrome.tabs.create({ url });
-      showToast("✓ Opened cookie JSON in new tab", "info");
-    });
+    const siteName = (resp.data?.source || "cookies").toLowerCase().replace(/[^a-z0-9]/g, "_");
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const filename = `${siteName}_cookies_${dateStr}.json`;
+
+    navigator.clipboard.writeText(json).catch(() => {});
+    downloadJsonFile(filename, json);
+    showToast(`✓ Downloaded ${filename} (${resp.count} cookies)`, "success");
   });
 }
 
@@ -215,8 +245,14 @@ function handleCookieEditorExportClick() {
   showToast("Preparing Cookie-Editor export...", "info");
   chrome.runtime.sendMessage({ action: "exportForCookieEditor" }, (resp) => {
     if (chrome.runtime.lastError) { showToast("Error: " + chrome.runtime.lastError.message, "error"); return; }
-    if (resp?.success) showToast(`✓ ${resp.message}`, "success", 5000);
-    else showToast("❌ " + (resp?.message || "Export failed"), "error");
+    if (resp?.success) {
+      if (resp.data) {
+        navigator.clipboard.writeText(JSON.stringify(resp.data, null, 2)).catch(() => {});
+      }
+      showToast(`✓ ${resp.message}`, "success", 5000);
+    } else {
+      showToast("❌ " + (resp?.message || "Export failed"), "error");
+    }
   });
 }
 
@@ -272,6 +308,7 @@ async function loadSavedSessions() {
       [
         { action: "incognito", title: "Load in incognito", icon: "🕵️" },
         { action: "current",   title: "Load in current browser", icon: "📂" },
+        { action: "export",    title: "Download session JSON file", icon: "💾" },
         { action: "rename",    title: "Rename", icon: "✏️" },
         { action: "delete",    title: "Delete", icon: "🗑️", cls: "delete" }
       ].forEach(({ action, title, icon, cls }) => {
@@ -302,8 +339,22 @@ async function loadSavedSessions() {
 function handleSessionAction(action, sessionId, sessionName) {
   if (action === "incognito") loadSessionIncognito(sessionId);
   else if (action === "current") loadSessionCurrent(sessionId);
+  else if (action === "export") exportSessionFile(sessionId, sessionName);
   else if (action === "rename") promptRenameSession(sessionId, sessionName);
   else if (action === "delete") deleteSession(sessionId);
+}
+
+function exportSessionFile(sessionId, sessionName) {
+  chrome.runtime.sendMessage({ action: "exportSession", sessionId }, (resp) => {
+    if (chrome.runtime.lastError || !resp?.success) {
+      showToast("Export failed: " + (resp?.message || "Unknown error"), "error");
+      return;
+    }
+    const safeName = (sessionName || "session").toLowerCase().replace(/[^a-z0-9]/g, "_");
+    const filename = `session_${safeName}.json`;
+    downloadJsonFile(filename, resp.data);
+    showToast(`✓ Downloaded ${filename}`, "success");
+  });
 }
 
 function loadSessionIncognito(sessionId) {
@@ -426,9 +477,13 @@ $("btnConfirmCustomDomain").addEventListener("click", () => {
       $("customDomainWrap").style.display = "none";
       $("customDomainInput").value = "";
       $("customDomainName").value = "";
-      // Reload profiles and re-render
+      // Reload profiles and select the new custom site
       chrome.runtime.sendMessage({ action: "listProfiles" }, (r) => {
-        if (r?.success) { allProfiles = r.profiles; renderSiteSelector(); }
+        if (r?.success) {
+          allProfiles = r.profiles;
+          renderSiteSelector();
+          if (resp.entry?.id) selectSite(resp.entry.id);
+        }
       });
     } else {
       showToast("Failed: " + (resp?.message || "Unknown error"), "error");
@@ -448,6 +503,18 @@ document.addEventListener("DOMContentLoaded", () => {
   $("btnIncognito").addEventListener("click", handleIncognitoClick);
   $("btnExport").addEventListener("click", handleExportClick);
   $("btnExportCookieEditor").addEventListener("click", handleCookieEditorExportClick);
+  
+  const btnOpenTab = $("btnOpenTab");
+  if (btnOpenTab) {
+    if (window.innerWidth > 400 && location.href.includes("popup.html")) {
+      btnOpenTab.style.display = "none";
+    } else {
+      btnOpenTab.addEventListener("click", () => {
+        chrome.tabs.create({ url: chrome.runtime.getURL("popup.html") });
+      });
+    }
+  }
+
   initSaveSessionBtn();
   initSiteDetection();
   loadSavedSessions();

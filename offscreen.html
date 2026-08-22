@@ -1,15 +1,10 @@
 <!DOCTYPE html>
 <html>
+<head>
+  <meta charset="utf-8">
+  <title>Offscreen Clipboard Helper</title>
+</head>
 <body>
-<script>
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.action === "writeClipboard") {
-      navigator.clipboard.writeText(message.text)
-        .then(() => sendResponse({ success: true }))
-        .catch(e => sendResponse({ success: false, error: e.message }));
-      return true;
-    }
-  });
-</script>
+  <script src="offscreen.js"></script>
 </body>
 </html>

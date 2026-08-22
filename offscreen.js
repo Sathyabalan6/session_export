@@ -1,0 +1,8 @@
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === "writeClipboard") {
+    navigator.clipboard.writeText(message.text)
+      .then(() => sendResponse({ success: true }))
+      .catch((e) => sendResponse({ success: false, error: e.message }));
+    return true;
+  }
+});
